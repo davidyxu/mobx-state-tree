@@ -236,3 +236,68 @@ test("#1250", async () => {
     expect(calls).toEqual(["setX (21) <- (undefined) - onFinish (error: false)"])
     calls.length = 0
 })
+
+const M = types
+    .model({})
+    .actions(self => ({
+        sync: (calls: string[]) => {
+            calls.push("sync - run")
+            return true
+        },
+        innerFlow: flow(function*(calls: string[]) {
+            calls.push("innerFlow - run 1")
+            yield Promise.resolve()
+            calls.push("innerFlow - run 2")
+            return true
+        })
+    }))
+    .actions(self => ({
+        outerFlow: flow(function*(calls: string[]) {
+            calls.push("outerFlow - run 1")
+            yield self.innerFlow(calls)
+            calls.push("outerFlow - run 2")
+            return true
+        })
+    }))
+
+function addFlowMiddleware(m: any, calls: string[]) {
+    const mware = createActionTrackingMiddleware2({
+        onStart(call) {
+            call.env = call.id // just to check env is copied properly down
+            calls.push(`${call.name} (${call.id}) - onStart`)
+        },
+        onResume(call) {
+            calls.push(`${call.name} (${call.id}) - onResume`)
+        },
+        onSuspend(call) {
+            calls.push(`${call.name} (${call.id}) - onSuspend`)
+        },
+        onFinish(call, error) {
+            calls.push(`${call.name} (${call.id}) - onFinish (error: ${!!error})`)
+        }
+    })
+    addMiddleware(m, mware)
+}
+
+test("sync", async () => {
+    const m = M.create()
+    const calls: string[] = []
+    addFlowMiddleware(m, calls)
+    await m.sync(calls)
+    console.log("sync", calls)
+})
+test("innerFlow", async () => {
+    const m = M.create()
+    const calls: string[] = []
+    addFlowMiddleware(m, calls)
+    await m.innerFlow(calls)
+    console.log("innerFlow", calls)
+})
+
+test("outerFlow", async () => {
+    const m = M.create()
+    const calls: string[] = []
+    addFlowMiddleware(m, calls)
+    await m.outerFlow(calls)
+    console.log("outerFlow", calls)
+})

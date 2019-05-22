@@ -10,10 +10,14 @@ export interface IActionTrackingMiddleware2Call<TEnv> extends Readonly<IActionCo
 export interface IActionTrackingMiddleware2Hooks<TEnv> {
     filter?: (call: IActionTrackingMiddleware2Call<TEnv>) => boolean
     onStart: (call: IActionTrackingMiddleware2Call<TEnv>) => void
+    onSuspend?: (call: IActionTrackingMiddleware2Call<TEnv>) => void
+    onResume?: (call: IActionTrackingMiddleware2Call<TEnv>) => void
     onFinish: (call: IActionTrackingMiddleware2Call<TEnv>, error?: any) => void
 }
 
 class RunningAction {
+    public firstRun = true
+
     private flowsPending = 0
     private running = true
 
@@ -32,6 +36,18 @@ class RunningAction {
             if (this.hooks) {
                 this.hooks.onFinish(this.call, error)
             }
+        }
+    }
+
+    suspend() {
+        if (this.hooks && this.hooks.onSuspend) {
+            this.hooks.onSuspend(this.call)
+        }
+    }
+
+    resume() {
+        if (this.hooks && this.hooks.onResume) {
+            this.hooks.onResume(this.call)
         }
     }
 
@@ -97,11 +113,15 @@ export function createActionTrackingMiddleware2<TEnv = any>(
             const hooks = passesFilter ? middlewareHooks : undefined
 
             const runningAction = new RunningAction(hooks, newCall)
+
             runningActions.set(call, runningAction)
 
             let res
             try {
+                runningAction.resume()
                 res = next(call)
+                runningAction.suspend()
+                runningAction.firstRun = false
             } catch (e) {
                 runningAction.finish(e)
                 throw e
@@ -124,7 +144,20 @@ export function createActionTrackingMiddleware2<TEnv = any>(
                 }
                 case "flow_resume":
                 case "flow_resume_error": {
-                    return next(call)
+                    /**
+                     * We have to check if this is the first run because we have to run the first resume and suspend hooks synchronously
+                     * Because we don't know if it's a flow until after we've started action
+                     */
+                    if (!parentRunningAction.firstRun) {
+                        parentRunningAction.resume()
+                    }
+                    try {
+                        return next(call)
+                    } finally {
+                        if (!parentRunningAction.firstRun) {
+                            parentRunningAction.suspend()
+                        }
+                    }
                 }
                 case "flow_throw": {
                     const error = call.args[0]
